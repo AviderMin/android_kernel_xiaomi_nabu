@@ -1,0 +1,3 @@
+[ZoneTransfer]
+ZoneId=3
+HostUrl=https://gitlab.com/simonpunk/susfs4ksu/-/raw/kernel-4.14/kernel_patches/include/linux/susfs.h?ref_type=heads&inline=false
