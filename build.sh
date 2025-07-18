@@ -13,18 +13,16 @@ DTB_SOURCE_DIR=./out/arch/arm64/boot/dts/qcom
 DTB_TARGET=$OUTPUT_DIR/dtb
 
 # 参数处理
+ccache_=`which ccache`
 no_mkclean=false
-no_ccache=false
-no_thinlto=false  # 默认启用 ThinLTO
-with_ksu=false
+use_thinlto=false
 make_flags=
 
 while [ $# != 0 ]; do
     case $1 in
-        "--noclean") no_mkclean=true;;
-        "--noccache") no_ccache=true;;
-        "--nolto") no_thinlto=true;;  # 通过此参数禁用 ThinLTO
-        "--ksu") with_ksu=true;;
+        "--noclean") no_mkclean=true ;;
+        "--noccache") ccache_= ;;
+        "--thinlto") use_thinlto=true ;;
         "--") {
             shift
             while [ $# != 0 ]; do
@@ -32,22 +30,25 @@ while [ $# != 0 ]; do
                 shift
             done
             break
-        };;
+        } ;;
         *) {
             cat <<EOF
 Usage: $0 <operate>
 operate:
-    --noclean  : build without run "make mrproper"
-    --noccache : build without ccache
-    --nolto    : disable ThinLTO (now enabled by default)
-    --ksu      : build with KernelSU support
-    -- <args>  : parameters passed directly to make
+    --noclean   : build without run "make mrproper"
+    --noccache  : build without ccache
+    --thinlto   : build using ThinLTO (default is Full LTO)
+    -- <args>   : parameters passed directly to make
 EOF
             exit 1
-        };;
+        } ;;
     esac
     shift
 done
+
+if [ -z "$ccache_" ]; then
+    echo -e "${yellow}Warning: ccache is not used!${white}"
+fi
 
 # 环境设置
 export CLANG_PATH=/home/avider/android_kernel/build_toolchain/clang-r536225
@@ -60,19 +61,14 @@ export KBUILD_BUILD_USER="avider"
 touch .scmversion
 current_date=$(date +"%Y%m%d")
 export LOCALVERSION="-$current_date"
-$with_ksu && export LOCALVERSION="${LOCALVERSION}-ksu"
 
-
-# ccache 设置
-ccache_=
-(! $no_ccache) && ccache_=`which ccache` || echo -e "${yellow}Warning: ccache is not used! $white"
-
+# 记录 ccache 状态
 if [ -n "$ccache_" ]; then
     orig_cache_hit_d=$(  ccache -s | grep 'cache hit (direct)'      | awk '{print $4}')
     orig_cache_hit_p=$(  ccache -s | grep 'cache hit (preprocessed)'| awk '{print $4}')
-    orig_cache_miss=$(   ccache -s | grep 'cache miss'             | awk '{print $3}')
-    orig_cache_hit_rate=$(ccache -s | grep 'cache hit rate'        | awk '{print $4 " %"}')
-    orig_cache_size=$(   ccache -s | grep '^cache size'            | awk '{print $3 " " $4}')
+    orig_cache_miss=$(   ccache -s | grep 'cache miss'              | awk '{print $3}')
+    orig_cache_hit_rate=$(ccache -s | grep 'cache hit rate'         | awk '{print $4 " %"}')
+    orig_cache_size=$(   ccache -s | grep '^cache size'             | awk '{print $3 " " $4}')
 fi
 
 # 清理和配置
@@ -80,27 +76,26 @@ rm -f $ZIMG
 $no_mkclean || make mrproper O=out || exit 1
 make nabu_defconfig O=out || exit 1
 
-# 默认启用 ThinLTO（除非 --nolto 被指定）
-$no_thinlto && {
-    ./scripts/config --file out/.config -d THINLTO
-    ./scripts/config --file out/.config -d LTO_CLANG
-    ./scripts/config --file out/.config -e LTO_NONE
-} || {
-    ./scripts/config --file out/.config -e THINLTO
+# 设置 LTO 模式（仅 Full LTO 或 ThinLTO）
+if $use_thinlto; then
+    echo -e "${yellow}Using ThinLTO mode...${white}"
     ./scripts/config --file out/.config -e LTO_CLANG
+    ./scripts/config --file out/.config -e THINLTO
     ./scripts/config --file out/.config -d LTO_NONE
-}
+else
+    echo -e "${yellow}Using Full LTO mode...${white}"
+    ./scripts/config --file out/.config -e LTO_CLANG
+    ./scripts/config --file out/.config -d THINLTO
+    ./scripts/config --file out/.config -d LTO_NONE
+fi
 
-# 保持其他优化配置
+# 其他优化配置
 ./scripts/config --file out/.config -e RANDOMIZE_MODULE_REGION_FULL
 
-# KernelSU 配置
-$with_ksu && {
-    ./scripts/config --file out/.config -e KSU
-    ./scripts/config --file out/.config -d KSU_DEBUG
-}
+# 应用配置
+make O=out olddefconfig
 
-# 编译
+# 编译开始
 Start=$(date +"%s")
 
 make -j$(nproc --all) \
@@ -121,23 +116,21 @@ exit_code=$?
 End=$(date +"%s")
 Diff=$(($End - $Start))
 
-# 处理编译结果
+# 构建成功时处理产物
 if [ -f $ZIMG ]; then
     mkdir -p $OUTPUT_DIR
-    
-    # 复制内核镜像
-    cp -f ./out/arch/arm64/boot/Image $OUTPUT_DIR/Image
-    
-# 合并 DTB 文件（通配符自动匹配）
-DTB_FILES=($DTB_SOURCE_DIR/sm8150*.dtb)
 
-echo -e "${yellow}Merging DTB files...${white}"
-cat "${DTB_FILES[@]}" > $DTB_TARGET || {
-    echo -e "${red}Failed to merge DTB files!${white}"
-    exit 1
-}
-echo -e "${gre}DTB files merged successfully to $DTB_TARGET${white}"
-    
+    cp -f ./out/arch/arm64/boot/Image $OUTPUT_DIR/Image
+
+    # 合并 DTB 文件
+    DTB_FILES=($DTB_SOURCE_DIR/sm8150*.dtb)
+    echo -e "${yellow}Merging DTB files...${white}"
+    cat "${DTB_FILES[@]}" > $DTB_TARGET || {
+        echo -e "${red}Failed to merge DTB files!${white}"
+        exit 1
+    }
+    echo -e "${gre}DTB files merged successfully to $DTB_TARGET${white}"
+
     # 处理 dtbo.img
     cp -f ./out/arch/arm64/boot/dtbo.img $OUTPUT_DIR/dtbo.img
     which avbtool &>/dev/null && {
@@ -146,29 +139,30 @@ echo -e "${gre}DTB files merged successfully to $DTB_TARGET${white}"
             --partition_size $((32 * 1024 * 1024)) \
             --image $OUTPUT_DIR/dtbo.img
     } || {
-        echo -e "${yellow}Warning: Skip adding hashes and footer to dtbo image! $white"
+        echo -e "${yellow}Warning: Skip adding hashes and footer to dtbo image!${white}"
     }
-    
-    # 处理内核模块
+
+    # 复制模块
     cat ./out/modules.order | while read line; do
         module_file=./out/${line#*/}
         [ -f $module_file ] && cp -f $module_file $OUTPUT_DIR
     done
-    
+
+    # Strip 模块
     for f in `ls -1 $OUTPUT_DIR | grep '.ko$'`; do
         llvm-strip -S ${OUTPUT_DIR}/$f &
     done
     wait
-    
+
     echo -e "$gre << Build completed in $(($Diff / 60)) minutes and $(($Diff % 60)) seconds >> \n $white"
-    
+
     # 显示 ccache 状态
     if [ -n "$ccache_" ]; then
         now_cache_hit_d=$(  ccache -s | grep 'cache hit (direct)'      | awk '{print $4}')
         now_cache_hit_p=$(  ccache -s | grep 'cache hit (preprocessed)'| awk '{print $4}')
-        now_cache_miss=$(   ccache -s | grep 'cache miss'             | awk '{print $3}')
-        now_cache_hit_rate=$(ccache -s | grep 'cache hit rate'        | awk '{print $4 " %"}')
-        now_cache_size=$(   ccache -s | grep '^cache size'            | awk '{print $3 " " $4}')
+        now_cache_miss=$(   ccache -s | grep 'cache miss'              | awk '{print $3}')
+        now_cache_hit_rate=$(ccache -s | grep 'cache hit rate'         | awk '{print $4 " %"}')
+        now_cache_size=$(   ccache -s | grep '^cache size'             | awk '{print $3 " " $4}')
         echo -e "${yellow}ccache status:${white}"
         echo -e "\tcache hit (direct)\t\t"  $orig_cache_hit_d   "\t${gre}->${white}\t"  $now_cache_hit_d   "\t${gre}+${white} $((now_cache_hit_d - orig_cache_hit_d))"
         echo -e "\tcache hit (preprocessed)\t"  $orig_cache_hit_p   "\t${gre}->${white}\t"  $now_cache_hit_p   "\t${gre}+${white} $((now_cache_hit_p - orig_cache_hit_p))"
