@@ -60,7 +60,7 @@ export KBUILD_BUILD_USER="avider"
 
 touch .scmversion
 current_date=$(date +"%Y%m%d")
-export LOCALVERSION="-v1.0-$current_date"
+export LOCALVERSION="-$current_date"
 
 # 记录 ccache 状态
 if [ -n "$ccache_" ]; then
@@ -74,7 +74,7 @@ fi
 # 清理和配置
 rm -f $ZIMG
 $no_mkclean || make mrproper O=out || exit 1
-make nabu_defconfig O=out || exit 1
+make vendor/xiaomi/nabu_inflated_defconfig O=out || exit 1
 
 # 设置 LTO 模式（仅 Full LTO 或 ThinLTO）
 if $use_thinlto; then
