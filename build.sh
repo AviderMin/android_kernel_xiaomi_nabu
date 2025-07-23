@@ -70,7 +70,7 @@ export KBUILD_BUILD_USER=$(whoami)
 
 touch .scmversion
 current_date=$(date +"%Y%m%d")
-export LOCALVERSION="-$current_date"
+export LOCALVERSION="-v1.2-$current_date"
 
 # 记录 ccache 状态
 get_ccache_stat() {
